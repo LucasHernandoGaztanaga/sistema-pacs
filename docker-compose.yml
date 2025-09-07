@@ -1,0 +1,308 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15.5-alpine
+    container_name: pacs-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: ${TZ}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./config/postgres/init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    networks:
+      pacs-network:
+        ipv4_address: 172.25.0.10
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # OpenLDAP Server
+  ldap:
+    image: osixia/openldap:1.5.0
+    container_name: pacs-ldap
+    restart: unless-stopped
+    environment:
+      LDAP_ORGANISATION: ${LDAP_ORGANISATION}
+      LDAP_DOMAIN: ${LDAP_DOMAIN}
+      LDAP_BASE_DN: ${LDAP_BASE_DN}
+      LDAP_ADMIN_PASSWORD: ${LDAP_ADMIN_PASSWORD}
+      LDAP_READONLY_USER: ${LDAP_READONLY_USER}
+      LDAP_READONLY_USER_USERNAME: ${LDAP_READONLY_USER_USERNAME}
+      LDAP_READONLY_USER_PASSWORD: ${LDAP_READONLY_USER_PASSWORD}
+      LDAP_TLS: "false"
+      TZ: ${TZ}
+    volumes:
+      - ldap-data:/var/lib/ldap
+      - ldap-config:/etc/ldap/slapd.d
+    ports:
+      - "389:389"
+      - "636:636"
+    networks:
+      pacs-network:
+        ipv4_address: 172.25.0.11
+    healthcheck:
+      test: ["CMD", "ldapsearch", "-x", "-H", "ldap://localhost", "-b", "", "-s", "base"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # phpLDAPadmin (optional LDAP management interface)
+  ldap-admin:
+    image: osixia/phpldapadmin:0.9.0
+    container_name: pacs-ldap-admin
+    restart: unless-stopped
+    environment:
+      PHPLDAPADMIN_LDAP_HOSTS: "ldap"
+      PHPLDAPADMIN_HTTPS: "false"
+      TZ: ${TZ}
+    ports:
+      - "6443:443"
+      - "6080:80"
+    networks:
+      pacs-network:
+        ipv4_address: 172.25.0.12
+    depends_on:
+      - ldap
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # DCM4CHEE Arc Light
+  dcm4chee-arc:
+    image: dcm4che/dcm4chee-arc-psql:5.31.2
+    container_name: pacs-dcm4chee
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_HOST: postgres
+      ARCHIVE_DEVICE_NAME: ${ARCHIVE_DEVICE_NAME}
+      ARCHIVE_HOST: ${ARCHIVE_HOST}
+      STORAGE_DIR: ${STORAGE_DIR}
+      WILDFLY_ADMIN_USER: ${WILDFLY_ADMIN_USER}
+      WILDFLY_ADMIN_PASSWORD: ${WILDFLY_ADMIN_PASSWORD}
+      WILDFLY_CHOWN: /storage
+      WILDFLY_WAIT_FOR: postgres:5432 ldap:389
+      LDAP_URL: ldap://ldap:389
+      LDAP_BASE_DN: ${LDAP_BASE_DN}
+      LDAP_ROOTPASS: ${LDAP_ADMIN_PASSWORD}
+      TZ: ${TZ}
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+    volumes:
+      - dcm4chee-arc:/opt/wildfly/standalone
+      - dicom-storage:/storage
+    ports:
+      - "8080:8080"
+      - "8443:8443"
+      - "9990:9990"
+      - "9993:9993"
+      - "${DICOM_PORT}:11112"
+      - "${DICOM_TLS_PORT}:2762"
+      - "${HL7_PORT}:2575"
+      - "2576:2576"
+    networks:
+      pacs-network:
+        ipv4_address: 172.25.0.20
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ldap:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/dcm4chee-arc/ui2/"]
+      interval: 60s
+      timeout: 10s
+      retries: 10
+      start_period: 180s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # OHIF Viewer 
+  ohif:
+    image: ohif/app:v3.7.0
+    container_name: pacs-ohif
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      APP_CONFIG: /usr/share/nginx/html/app-config.js
+      TZ: ${TZ}
+    volumes:
+      - ./config/ohif/app-config.js:/usr/share/nginx/html/app-config.js:ro
+    ports:
+      - "${OHIF_PORT}:80"
+    networks:
+      pacs-network:
+        ipv4_address: 172.25.0.30
+    depends_on:
+      - dcm4chee-arc
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Oviyam Viewer - Build from Dockerfile
+  oviyam:
+    build:
+      context: ./config/oviyam
+      dockerfile: Dockerfile
+    image: pacs/oviyam:2.8.2
+    container_name: pacs-oviyam
+    restart: unless-stopped
+    environment:
+      CATALINA_OPTS: "-Xms512m -Xmx2048m"
+      DCM4CHEE_HOST: dcm4chee-arc
+      DCM4CHEE_AET: ${AE_TITLE}
+      DCM4CHEE_PORT: 11112
+      WADO_URL: http://dcm4chee-arc:8080/dcm4chee-arc/aets/${AE_TITLE}/wado
+      TZ: ${TZ}
+    volumes:
+      - oviyam-data:/usr/local/tomcat/webapps/oviyam
+    ports:
+      - "${OVIYAM_PORT}:8080"
+    networks:
+      pacs-network:
+        ipv4_address: 172.25.0.31
+    depends_on:
+      - dcm4chee-arc
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/oviyam"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+# Nginx Reverse Proxy
+  nginx:
+    image: nginx:1.25.3-alpine
+    container_name: pacs-nginx
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ}
+    volumes:
+      - ./config/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./config/nginx/conf.d:/etc/nginx/conf.d:ro
+      - nginx-cache:/var/cache/nginx
+      - nginx-logs:/var/log/nginx
+    ports:
+      - "${NGINX_HTTP_PORT}:80"
+      - "${NGINX_HTTPS_PORT}:443"
+    networks:
+      pacs-network:
+        ipv4_address: 172.25.0.100
+    depends_on:
+      - dcm4chee-arc
+      - ohif
+      - oviyam
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# Named Volumes
+volumes:
+  postgres-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/data/postgres
+  ldap-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/data/ldap
+  ldap-config:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/data/ldap-config
+  dicom-storage:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/data/dicom-storage
+  dcm4chee-arc:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/volumes/dcm4chee-arc
+  oviyam-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/volumes/oviyam
+  nginx-cache:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/volumes/nginx-cache
+  nginx-logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/data/logs/nginx
+
+# Network Configuration
+networks:
+  pacs-network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.25.0.0/16
+          gateway: 172.25.0.1

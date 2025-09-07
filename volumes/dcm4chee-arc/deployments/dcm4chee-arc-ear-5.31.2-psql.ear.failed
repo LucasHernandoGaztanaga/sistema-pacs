@@ -1,0 +1,7 @@
+"{\"WFLYCTL0080: Failed services\" => {\"jboss.deployment.subunit.\\\"dcm4chee-arc-ear-5.31.2-psql.ear\\\".\\\"dcm4chee-arc-service-5.31.2.jar\\\".component.ArchiveServiceImpl.START\" => \"java.lang.IllegalStateException: WFLYEE0042: Failed to construct component instance
+    Caused by: java.lang.IllegalStateException: WFLYEE0042: Failed to construct component instance
+    Caused by: jakarta.ejb.EJBException: org.jboss.weld.exceptions.WeldException: WELD-000049: Unable to invoke private void org.dcm4chee.arc.impl.ArchiveDeviceProducer.init() on org.dcm4chee.arc.impl.ArchiveDeviceProducer@613e2a0e
+    Caused by: org.jboss.weld.exceptions.WeldException: WELD-000049: Unable to invoke private void org.dcm4chee.arc.impl.ArchiveDeviceProducer.init() on org.dcm4chee.arc.impl.ArchiveDeviceProducer@613e2a0e
+    Caused by: java.lang.reflect.InvocationTargetException
+    Caused by: java.lang.RuntimeException: org.dcm4che3.conf.api.ConfigurationNotFoundException
+    Caused by: org.dcm4che3.conf.api.ConfigurationNotFoundException\"}}"
